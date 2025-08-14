@@ -12,16 +12,60 @@ client = AzureOpenAI(
     azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT")
 )
 
-# Make a simple request
+# Use deployment name from env with a sensible fallback
+deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME", "gpt-5-chat")
 
-response = client.chat.completions.create(
-    model=os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME", "gpt-4o"),  # Use env var with fallback
-    messages=[
-        {"role": "system", "content": "You are a helpful assistant."},
-        {"role": "user", "content": "Hello! What's the weather like?"}
-    ],
-    max_tokens=100
-)
+# =====================
+# Global context (edit this to shape all responses)
+# Provide domain info, tone, constraints, style guides, etc.
+# Example:
+# - Audience: Product managers at a fintech company
+# - Tone: Concise, friendly, and actionable
+# - Constraints: Cite assumptions, ask clarifying questions when needed
+# - Domain: Focus on scheduling features and integration patterns
+GLOBAL_CONTEXT = """
+You are a helpful assistant a developer working at a small financial institution.
+""".strip()
+# =====================
 
-# Print the response
-print(response.choices[0].message.content)
+# Build the system prompt with global context merged in one system message (so pruning keeps it)
+base_system_prompt = "You are a helpful assistant."
+if GLOBAL_CONTEXT:
+    base_system_prompt += f"\n\nContext to follow for every response:\n{GLOBAL_CONTEXT}"
+
+# Initialize conversation history with a system prompt that includes the global context
+messages = [
+    {"role": "system", "content": base_system_prompt}
+]
+
+# Keep the conversation within reasonable length to avoid context limit issues
+def prune_messages(history, max_pairs=20):
+    # Keep system + last N user/assistant pairs
+    if not history:
+        return history
+    system = history[:1] if history[0].get("role") == "system" else []
+    tail = history[-(2 * max_pairs):]
+    return system + tail
+
+print("Type 'exit' to quit.")
+while True:
+    user_input = input("You: ").strip()
+    if user_input.lower() in ("exit", "quit", "q"):
+        break
+
+    messages.append({"role": "user", "content": user_input})
+
+    try:
+        resp = client.chat.completions.create(
+            model=deployment,
+            messages=messages,
+            temperature=0.7,
+            max_tokens=500,
+        )
+        assistant_reply = resp.choices[0].message.content
+        print(f"Assistant: {assistant_reply}\n")
+
+        messages.append({"role": "assistant", "content": assistant_reply})
+        messages = prune_messages(messages, max_pairs=20)
+    except Exception as e:
+        print(f"Error: {e}")
